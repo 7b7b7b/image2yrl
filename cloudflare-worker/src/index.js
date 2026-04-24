@@ -583,8 +583,11 @@ const INDEX_HTML = `<!doctype html>
     @keyframes spin { to { transform:rotate(360deg); } }
     .strip { background:var(--panel); border-top:1px solid var(--line); padding:10px 14px; overflow-x:auto; white-space:nowrap; }
     .strip:empty::before { content:"No session history yet"; color:var(--muted); font-size:12px; }
-    .thumb { width:112px; height:74px; object-fit:cover; border:2px solid transparent; border-radius:7px; margin-right:8px; vertical-align:middle; cursor:pointer; background:#e5e7eb; }
+    .thumb-item { position:relative; display:inline-block; width:112px; height:74px; margin-right:8px; vertical-align:middle; }
+    .thumb { width:112px; height:74px; object-fit:cover; border:2px solid transparent; border-radius:7px; vertical-align:middle; cursor:pointer; background:#e5e7eb; }
     .thumb.active { border-color:var(--accent); }
+    .thumb-delete { position:absolute; right:4px; top:4px; width:24px; min-height:24px; height:24px; padding:0; border:0; border-radius:999px; background:rgba(15,23,42,.82); color:#fff; font-size:16px; line-height:22px; display:grid; place-items:center; }
+    .thumb-delete:hover { background:rgba(185,28,28,.92); }
     @media (max-width:860px) {
       body { font-size:15px; }
       .app { display:block; min-height:100vh; min-height:100dvh; }
@@ -599,7 +602,8 @@ const INDEX_HTML = `<!doctype html>
       .stage { min-height:52vh; min-height:52dvh; padding:10px; }
       .image { max-height:48vh; max-height:48dvh; }
       .strip { padding:8px 10px; }
-      .thumb { width:96px; height:64px; margin-right:6px; }
+      .thumb-item { width:96px; height:64px; margin-right:6px; }
+      .thumb { width:96px; height:64px; }
       .refs { min-height:68px; }
     }
     @media (max-width:480px) {
@@ -608,6 +612,7 @@ const INDEX_HTML = `<!doctype html>
       .stage { min-height:48vh; min-height:48dvh; }
       main { grid-template-rows:minmax(48vh,1fr) auto; grid-template-rows:minmax(48dvh,1fr) auto; }
       .image { max-height:44vh; max-height:44dvh; }
+      .thumb-item { width:84px; height:58px; }
       .thumb { width:84px; height:58px; }
     }
   </style>
@@ -750,12 +755,24 @@ const INDEX_HTML = `<!doctype html>
     function renderStrip() {
       $("strip").innerHTML = "";
       images.forEach((image, index) => {
+        const item = document.createElement("div");
+        item.className = "thumb-item";
         const thumb = document.createElement("img");
         thumb.className = "thumb";
         thumb.src = image.url;
         thumb.title = image.name;
         thumb.addEventListener("click", () => showImage(index));
-        $("strip").appendChild(thumb);
+        const deleteButton = document.createElement("button");
+        deleteButton.className = "thumb-delete";
+        deleteButton.type = "button";
+        deleteButton.title = "Delete from history";
+        deleteButton.textContent = "x";
+        deleteButton.addEventListener("click", event => {
+          event.stopPropagation();
+          deleteImage(index);
+        });
+        item.append(thumb, deleteButton);
+        $("strip").appendChild(item);
       });
     }
 
@@ -776,7 +793,7 @@ const INDEX_HTML = `<!doctype html>
       download.textContent = "Download";
       wrap.append(img, download);
       $("imageHost").appendChild(wrap);
-      [...$("strip").querySelectorAll("img")].forEach((imgNode, i) => imgNode.classList.toggle("active", i === index));
+      [...$("strip").querySelectorAll(".thumb")].forEach((imgNode, i) => imgNode.classList.toggle("active", i === index));
       if (image.prompt) $("prompt").value = image.prompt;
       if (image.model) $("model").value = image.model;
       if (image.size) $("size").value = image.size;
@@ -789,6 +806,19 @@ const INDEX_HTML = `<!doctype html>
       renderStrip();
       saveHistory();
       if (images.length) showImage(0);
+    }
+
+    function deleteImage(index) {
+      images.splice(index, 1);
+      saveHistory();
+      renderStrip();
+      if (!images.length) {
+        active = -1;
+        $("imageHost").innerHTML = '<div class="empty">Generated images will appear here</div>';
+        setStatus("Ready");
+        return;
+      }
+      showImage(Math.min(index, images.length - 1));
     }
 
     async function loadConfig() {
