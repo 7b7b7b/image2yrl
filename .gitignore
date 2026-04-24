@@ -10,3 +10,6 @@ dist/outputs/**
 !dist/outputs/**/
 !dist/outputs/**/*.png
 *.spec
+cloudflare-worker/node_modules/
+cloudflare-worker/.dev.vars
+cloudflare-worker/.wrangler/

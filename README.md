@@ -74,5 +74,7 @@ build_windows_exe.bat
 
 ## 部署到子域名
 
-可以把网页客户端部署到 Render，并绑定到 `image.wormforce.net`。
-部署说明见 [DEPLOY_RENDER.md](DEPLOY_RENDER.md)。
+推荐用 Cloudflare Workers 部署到 `image.wormforce.net`，不需要绑卡。
+部署说明见 [DEPLOY_CLOUDFLARE.md](DEPLOY_CLOUDFLARE.md)。
+
+Render 方案也保留在 [DEPLOY_RENDER.md](DEPLOY_RENDER.md)，但 Render 可能要求添加银行卡验证。
