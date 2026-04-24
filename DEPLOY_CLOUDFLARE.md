@@ -123,7 +123,11 @@ npm run dev
 - If the upstream API returns base64 image data, generated images are returned
   to the current browser session as data URLs. Use the `Download` button to keep
   anything important.
-- Session history is in memory only. Reloading the page clears the thumbnails.
+- Session history is saved in the browser's `localStorage`. Refreshing the page
+  keeps recent thumbnails on that same browser/device. It is not synced across
+  devices.
+- The browser keeps up to 24 recent results. Base64 images are larger, so only
+  the newest 6 base64 images are retained to avoid filling browser storage.
 - The default `workers_dev = false` setting avoids publishing a separate
   `*.workers.dev` entrance. Access should be through `image.wormforce.net`.
 

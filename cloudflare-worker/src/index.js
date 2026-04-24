@@ -652,6 +652,9 @@ const INDEX_HTML = `<!doctype html>
   </div>
   <script>
     const $ = id => document.getElementById(id);
+    const HISTORY_KEY = "image2yrl.history.v1";
+    const MAX_HISTORY = 24;
+    const MAX_STORED_DATA_URLS = 6;
     let images = [];
     let active = -1;
     let referenceImages = [];
@@ -703,6 +706,59 @@ const INDEX_HTML = `<!doctype html>
       });
     }
 
+    function imageIsDataUrl(image) {
+      return typeof image.url === "string" && image.url.startsWith("data:");
+    }
+
+    function trimForStorage(items) {
+      let storedDataUrls = 0;
+      return items.slice(0, MAX_HISTORY).filter(image => {
+        if (!imageIsDataUrl(image)) return true;
+        storedDataUrls += 1;
+        return storedDataUrls <= MAX_STORED_DATA_URLS;
+      });
+    }
+
+    function saveHistory() {
+      try {
+        const stored = trimForStorage(images);
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(stored));
+      } catch (err) {
+        try {
+          const lightweight = images.filter(image => !imageIsDataUrl(image)).slice(0, MAX_HISTORY);
+          localStorage.setItem(HISTORY_KEY, JSON.stringify(lightweight));
+        } catch {
+          localStorage.removeItem(HISTORY_KEY);
+        }
+      }
+    }
+
+    function loadHistory() {
+      try {
+        const raw = localStorage.getItem(HISTORY_KEY);
+        if (!raw) return;
+        const stored = JSON.parse(raw);
+        if (!Array.isArray(stored)) return;
+        images = stored.filter(image => image && typeof image === "object" && image.url && image.name);
+        renderStrip();
+        if (images.length) showImage(0);
+      } catch {
+        localStorage.removeItem(HISTORY_KEY);
+      }
+    }
+
+    function renderStrip() {
+      $("strip").innerHTML = "";
+      images.forEach((image, index) => {
+        const thumb = document.createElement("img");
+        thumb.className = "thumb";
+        thumb.src = image.url;
+        thumb.title = image.name;
+        thumb.addEventListener("click", () => showImage(index));
+        $("strip").appendChild(thumb);
+      });
+    }
+
     function showImage(index) {
       active = index;
       const image = images[index];
@@ -729,16 +785,9 @@ const INDEX_HTML = `<!doctype html>
     }
 
     function prependImages(newImages) {
-      images = newImages.concat(images).slice(0, 40);
-      $("strip").innerHTML = "";
-      images.forEach((image, index) => {
-        const thumb = document.createElement("img");
-        thumb.className = "thumb";
-        thumb.src = image.url;
-        thumb.title = image.name;
-        thumb.addEventListener("click", () => showImage(index));
-        $("strip").appendChild(thumb);
-      });
+      images = newImages.concat(images).slice(0, MAX_HISTORY);
+      renderStrip();
+      saveHistory();
       if (images.length) showImage(0);
     }
 
@@ -805,6 +854,7 @@ const INDEX_HTML = `<!doctype html>
       addReferenceFiles(event.target.files).catch(err => setError(err.message || String(err)));
       event.target.value = "";
     });
+    loadHistory();
     loadConfig().catch(err => setError(err.message || String(err)));
   </script>
 </body>
