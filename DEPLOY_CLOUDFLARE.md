@@ -17,6 +17,25 @@ and follow Cloudflare's nameserver instructions first.
 
 ## Deploy
 
+Before deploying, create a DNS record for the upstream image API:
+
+```text
+Type: A
+Name: image-api
+IPv4 address: 45.59.101.161
+Proxy status: DNS only
+TTL: Auto
+```
+
+This creates:
+
+```text
+image-api.wormforce.net
+```
+
+Keep this record **DNS only**. The API listens on port `8083`, and Cloudflare
+Workers should call it by hostname instead of raw IP.
+
 From this repo:
 
 ```bash
@@ -71,6 +90,7 @@ custom_domain = true
 
 [vars]
 ALLOWED_HOSTS = "image.wormforce.net"
+IMAGE_API_BASE = "http://image-api.wormforce.net:8083/v1"
 ```
 
 If you want another subdomain, update both values in

@@ -1,4 +1,4 @@
-const DEFAULT_BASE_URL = "http://45.59.101.161:8083/v1";
+const DEFAULT_BASE_URL = "http://image-api.wormforce.net:8083/v1";
 const DEFAULT_MODEL = "gpt-image-2";
 const DEFAULT_USERNAME = "admin";
 const MAX_COUNT = 4;
@@ -80,6 +80,24 @@ function jsonResponse(payload, status = 200) {
 
 function normalizeBaseUrl(baseUrl) {
   return (baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, "");
+}
+
+function assertFetchableApiBase(baseUrl) {
+  let parsed;
+  try {
+    parsed = new URL(normalizeBaseUrl(baseUrl));
+  } catch {
+    throw new Error(`IMAGE_API_BASE is not a valid URL: ${baseUrl}`);
+  }
+
+  const hostname = parsed.hostname;
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname) || hostname.includes(":")) {
+    throw new Error(
+      "Cloudflare Workers cannot call the image API through a raw IP address. " +
+        "Create a DNS-only A record such as image-api.wormforce.net -> 45.59.101.161, " +
+        "then set IMAGE_API_BASE to http://image-api.wormforce.net:8083/v1.",
+    );
+  }
 }
 
 function hostWithoutPort(host) {
@@ -177,14 +195,21 @@ function validateApiKey(apiKey) {
 
 async function apiJson(env, path, options = {}) {
   validateApiKey(env.IMAGE_API_KEY || "");
-  const response = await fetch(`${normalizeBaseUrl(env.IMAGE_API_BASE)}/${path.replace(/^\/+/, "")}`, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${env.IMAGE_API_KEY}`,
-      Accept: "application/json",
-      ...(options.headers || {}),
-    },
-  });
+  assertFetchableApiBase(env.IMAGE_API_BASE || DEFAULT_BASE_URL);
+  const apiUrl = `${normalizeBaseUrl(env.IMAGE_API_BASE)}/${path.replace(/^\/+/, "")}`;
+  let response;
+  try {
+    response = await fetch(apiUrl, {
+      ...options,
+      headers: {
+        Authorization: `Bearer ${env.IMAGE_API_KEY}`,
+        Accept: "application/json",
+        ...(options.headers || {}),
+      },
+    });
+  } catch (error) {
+    throw new Error(`Could not call image API at ${apiUrl}: ${error.message || String(error)}`);
+  }
   const text = await response.text();
   let payload;
   try {
@@ -273,6 +298,7 @@ async function generateImages({ env, model, prompt, size, quality, count, name, 
 
 async function generateEdits({ env, model, prompt, size, quality, count, name, extra, references }) {
   validateApiKey(env.IMAGE_API_KEY || "");
+  assertFetchableApiBase(env.IMAGE_API_BASE || DEFAULT_BASE_URL);
   const form = new FormData();
   form.append("model", model);
   form.append("prompt", prompt);
@@ -292,14 +318,20 @@ async function generateEdits({ env, model, prompt, size, quality, count, name, e
     form.append(fieldName, new Blob([decoded.bytes], { type: decoded.contentType }), decoded.name);
   }
 
-  const response = await fetch(`${normalizeBaseUrl(env.IMAGE_API_BASE)}/images/edits`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env.IMAGE_API_KEY}`,
-      Accept: "application/json",
-    },
-    body: form,
-  });
+  const apiUrl = `${normalizeBaseUrl(env.IMAGE_API_BASE)}/images/edits`;
+  let response;
+  try {
+    response = await fetch(apiUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.IMAGE_API_KEY}`,
+        Accept: "application/json",
+      },
+      body: form,
+    });
+  } catch (error) {
+    throw new Error(`Could not call image API at ${apiUrl}: ${error.message || String(error)}`);
+  }
   const text = await response.text();
   let result;
   try {

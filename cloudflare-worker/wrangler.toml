@@ -8,7 +8,7 @@ pattern = "image.wormforce.net"
 custom_domain = true
 
 [vars]
-IMAGE_API_BASE = "http://45.59.101.161:8083/v1"
+IMAGE_API_BASE = "http://image-api.wormforce.net:8083/v1"
 IMAGE_MODEL = "gpt-image-2"
 APP_USERNAME = "admin"
 ALLOWED_HOSTS = "image.wormforce.net"
