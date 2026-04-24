@@ -46,7 +46,7 @@ export default {
 
       return new Response("Not Found", { status: 404, headers: commonHeaders() });
     } catch (error) {
-      return jsonResponse({ error: error.message || String(error) }, 500);
+      return jsonResponse({ error: friendlyError(error) }, 500);
     }
   },
 };
@@ -76,6 +76,19 @@ function jsonResponse(payload, status = 200) {
       "Content-Type": "application/json; charset=utf-8",
     },
   });
+}
+
+function friendlyError(error) {
+  const message = error?.message || String(error);
+  if (/string did not match the expected pattern|load failed|fetch failed|networkerror/i.test(message)) {
+    return [
+      "生成请求的网络链路临时失败。",
+      "这通常发生在 Cloudflare Worker 连接上游图片 API、等待长时间生成、或加载远程图片 URL 时。",
+      "请先重试一次；如果频繁出现，建议把上游 API 放到 HTTPS/443 或更稳定的服务上。",
+      `原始错误：${message}`,
+    ].join("\n");
+  }
+  return message;
 }
 
 function normalizeBaseUrl(baseUrl) {
@@ -391,23 +404,17 @@ async function extractImageItem(item) {
   if (typeof item.image === "string") {
     if (item.image.startsWith("data:")) return { url: item.image };
     if (item.image.startsWith("http://") || item.image.startsWith("https://")) {
-      return dataUrlFromRemoteImage(item.image);
+      return { url: item.image };
     }
     return { url: `data:image/png;base64,${item.image}` };
   }
   if (typeof item.url === "string") {
     if (item.url.startsWith("data:")) return { url: item.url };
-    return dataUrlFromRemoteImage(item.url);
+    if (item.url.startsWith("http://") || item.url.startsWith("https://")) {
+      return { url: item.url };
+    }
   }
   throw new Error(`Cannot find image data in item: ${JSON.stringify(item).slice(0, 500)}`);
-}
-
-async function dataUrlFromRemoteImage(url) {
-  const response = await fetch(url, { headers: { Accept: "image/*,*/*" } });
-  if (!response.ok) throw new Error(`Image download failed with HTTP ${response.status}.`);
-  const contentType = response.headers.get("Content-Type") || "image/png";
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  return { url: `data:${contentType};base64,${bytesToBase64(bytes)}` };
 }
 
 function safeFilename(value) {
@@ -435,6 +442,13 @@ function timestampSlug() {
 }
 
 function extensionFromDataUrl(dataUrl) {
+  if (dataUrl.startsWith("http://") || dataUrl.startsWith("https://")) {
+    const pathname = new URL(dataUrl).pathname.toLowerCase();
+    if (pathname.endsWith(".jpg") || pathname.endsWith(".jpeg")) return ".jpg";
+    if (pathname.endsWith(".webp")) return ".webp";
+    if (pathname.endsWith(".gif")) return ".gif";
+    return ".png";
+  }
   const contentType = /^data:([^;,]+)/.exec(dataUrl)?.[1]?.toLowerCase() || "image/png";
   if (contentType.includes("jpeg") || contentType.includes("jpg")) return ".jpg";
   if (contentType.includes("webp")) return ".webp";

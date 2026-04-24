@@ -116,8 +116,37 @@ npm run dev
 ## Notes
 
 - This Workers version does not need a server or credit card.
-- Generated images are returned to the current browser session as data URLs.
-  Use the `Download` button to keep anything important.
+- If the upstream API returns image URLs, the Worker passes those URLs through
+  instead of downloading the image again. This keeps responses smaller and
+  avoids an extra failure point.
+- If the upstream API returns base64 image data, generated images are returned
+  to the current browser session as data URLs. Use the `Download` button to keep
+  anything important.
 - Session history is in memory only. Reloading the page clears the thumbnails.
 - The default `workers_dev = false` setting avoids publishing a separate
   `*.workers.dev` entrance. Access should be through `image.wormforce.net`.
+
+## Troubleshooting
+
+### `The string did not match the expected pattern.` or `load failed`
+
+These usually mean the Worker could not complete one part of the network chain:
+
+```text
+browser -> Cloudflare Worker -> image-api.wormforce.net:8083 -> image result
+```
+
+First retry the same prompt. If it happens often:
+
+1. Confirm the DNS record exists and is DNS-only:
+   ```text
+   image-api.wormforce.net -> 45.59.101.161
+   ```
+2. Confirm `IMAGE_API_BASE` is:
+   ```text
+   http://image-api.wormforce.net:8083/v1
+   ```
+3. Try a smaller size such as `1024x1024` to rule out long generation time or
+   huge image payloads.
+4. For the most stable production setup, put the upstream image API behind
+   HTTPS on port `443` instead of HTTP port `8083`.
