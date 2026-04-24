@@ -4,5 +4,9 @@ outputs/
 __pycache__/
 *.pyc
 build/
-dist/
+dist/*
+!dist/outputs/
+dist/outputs/**
+!dist/outputs/**/
+!dist/outputs/**/*.png
 *.spec

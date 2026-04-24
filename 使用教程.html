@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>使用教程</title>
+  <style>
+    @page { size: A4; margin: 18mm; }
+    body { font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif; color: #111827; line-height: 1.65; font-size: 14px; }
+    h1 { font-size: 26px; margin: 0 0 20px; }
+    h2 { font-size: 19px; margin: 24px 0 10px; border-bottom: 1px solid #d8dee6; padding-bottom: 4px; }
+    h3 { font-size: 16px; margin: 18px 0 8px; }
+    code { font-family: Consolas, "Courier New", monospace; background: #f3f4f6; padding: 1px 4px; border-radius: 4px; }
+    pre { background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px 12px; overflow-wrap: break-word; white-space: pre-wrap; }
+    pre code { background: transparent; padding: 0; }
+    li { margin: 4px 0; }
+    p { margin: 8px 0; }
+  </style>
+</head>
+<body>
+<h1>Image API Client 杨苒琳专用 使用教程</h1>
+<h2>运行</h2>
+<p>双击运行：</p>
+<pre><code class="language-text">ImageApiClient.exe
+</code></pre>
+<p>程序会自动启动本地服务，并打开浏览器页面。无需安装 Python，也无需手动配置 API。</p>
+<p>如果 Windows 提示“未知发布者”或安全提醒，选择“更多信息”，再选择“仍要运行”。</p>
+<h2>文生图</h2>
+<ol>
+<li>在 <code>Prompt</code> 输入框里输入图片描述。</li>
+<li>选择 <code>Size</code>。</li>
+<li>选择 <code>Quality</code>，默认是 <code>high</code>。</li>
+<li><code>Count</code> 表示一次生成几张，最多 4 张。</li>
+<li>点击 <code>Generate</code>。</li>
+</ol>
+<p>生成过程中，右侧会显示半透明遮罩和旋转加载提示。生成完成后，图片会显示在右侧。</p>
+<h2>图生图</h2>
+<ol>
+<li>在 <code>Prompt</code> 输入框里输入你希望如何改图或参考生成。</li>
+<li>在 <code>Reference Images</code> 里选择一张或多张参考图。</li>
+<li>确认 <code>Size</code> 和 <code>Quality</code>。</li>
+<li>点击 <code>Generate</code>。</li>
+</ol>
+<p>有参考图时，程序会自动使用图生图接口；没有参考图时，会使用普通文生图接口。</p>
+<p>参考图缩略图右上角的 <code>x</code> 可以移除该参考图。</p>
+<h2>历史图片</h2>
+<p>底部横排会显示往期生成的图片缩略图。</p>
+<p>点击历史缩略图后：</p>
+<ul>
+<li>右侧会加载这张历史图片</li>
+<li><code>Prompt</code> 会自动回填当时使用的提示词</li>
+<li><code>Model</code>、<code>Size</code>、<code>Quality</code> 也会回填</li>
+</ul>
+<p>只有使用新版程序生成的图片，才能完整回填 prompt。旧图片如果没有历史记录，只能显示图片，不能恢复 prompt。</p>
+<h2>图片保存位置</h2>
+<p>图片会自动保存到 exe 同目录下的 <code>outputs</code> 文件夹：</p>
+<pre><code class="language-text">ImageApiClient.exe
+outputs/
+</code></pre>
+<p>历史记录保存在：</p>
+<pre><code class="language-text">outputs/history.json
+</code></pre>
+<p>不要删除 <code>history.json</code>，否则历史图片的 prompt 记录会丢失。</p>
+<h2>参数说明</h2>
+<h3>Size</h3>
+<p>常用选项：</p>
+<pre><code class="language-text">auto
+1024x1024
+1536x1024
+1024x1536
+2048x2048
+2048x1152
+3840x2160
+2160x3840
+</code></pre>
+<p><code>auto</code> 表示让模型自动选择合适尺寸。</p>
+<h3>Quality</h3>
+<p>可选：</p>
+<pre><code class="language-text">high
+medium
+low
+auto
+</code></pre>
+<p><code>high</code> 质量更好，但通常会更慢、成本更高。</p>
+<h3>Extra</h3>
+<p>高级参数，一般可以留空。</p>
+<p>如果需要传额外参数，必须填写 JSON，例如：</p>
+<pre><code class="language-json">{&quot;background&quot;:&quot;transparent&quot;}
+</code></pre>
+<h2>关闭程序</h2>
+<p>关闭浏览器页面不一定会关闭后台程序。</p>
+<p>如果需要完全退出，可以在任务管理器里结束 <code>ImageApiClient.exe</code>。</p>
+</body>
+</html>

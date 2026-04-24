@@ -9,11 +9,20 @@ import os
 import queue
 import subprocess
 import sys
+import tempfile
 import threading
 import tkinter as tk
+import webbrowser
 from pathlib import Path
+from html import escape
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
+
+try:
+    from PIL import Image, ImageTk
+except ImportError:  # Pillow is optional; Tkinter can still preview common formats.
+    Image = None
+    ImageTk = None
 
 from image_client import (
     DEFAULT_BASE_URL,
@@ -34,9 +43,28 @@ def app_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
+def resource_dir() -> Path:
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS)  # type: ignore[attr-defined]
+    return Path(__file__).resolve().parent
+
+
 APP_DIR = app_dir()
+RESOURCE_DIR = resource_dir()
 ENV_PATH = APP_DIR / ".env"
+ENV_EXAMPLE_PATH = RESOURCE_DIR / ".env.example"
 DEFAULT_OUTPUT_DIR = APP_DIR / "outputs"
+GPT_IMAGE_2_SIZES = (
+    "auto",
+    "1024x1024",
+    "1536x1024",
+    "1024x1536",
+    "2048x2048",
+    "2048x1152",
+    "3840x2160",
+    "2160x3840",
+)
+QUALITY_OPTIONS = ("high", "medium", "low", "auto")
 
 
 class ImageClientApp:
@@ -47,17 +75,22 @@ class ImageClientApp:
         self.root.minsize(900, 620)
 
         load_env_file(ENV_PATH)
+        if not ENV_PATH.exists():
+            load_env_file(ENV_EXAMPLE_PATH)
 
         self.worker_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.current_worker: threading.Thread | None = None
-        self.preview_source: tk.PhotoImage | None = None
+        self.preview_source: Any | None = None
         self.preview_image: tk.PhotoImage | None = None
+        self.preview_path: Path | None = None
+        self.preview_resize_after: str | None = None
         self.generated_paths: list[Path] = []
 
         self.api_key_var = tk.StringVar(value=os.environ.get("IMAGE_API_KEY", ""))
         self.base_url_var = tk.StringVar(value=os.environ.get("IMAGE_API_BASE", DEFAULT_BASE_URL))
         self.model_var = tk.StringVar(value=os.environ.get("IMAGE_MODEL", DEFAULT_MODEL))
-        self.size_var = tk.StringVar(value="1024x1024")
+        self.size_var = tk.StringVar(value="auto")
+        self.quality_var = tk.StringVar(value="high")
         self.count_var = tk.IntVar(value=1)
         self.timeout_var = tk.IntVar(value=240)
         self.name_var = tk.StringVar()
@@ -157,33 +190,43 @@ class ImageClientApp:
         size_box = ttk.Combobox(
             frame,
             textvariable=self.size_var,
-            values=("1024x1024", "2048x2048"),
+            values=GPT_IMAGE_2_SIZES,
             state="normal",
             width=14,
         )
         size_box.grid(row=0, column=1, sticky="w", pady=(10, 5))
 
-        ttk.Label(frame, text="Count").grid(row=1, column=0, sticky="w", padx=10, pady=5)
+        ttk.Label(frame, text="Quality").grid(row=1, column=0, sticky="w", padx=10, pady=5)
+        quality_box = ttk.Combobox(
+            frame,
+            textvariable=self.quality_var,
+            values=QUALITY_OPTIONS,
+            state="readonly",
+            width=14,
+        )
+        quality_box.grid(row=1, column=1, sticky="w", pady=5)
+
+        ttk.Label(frame, text="Count").grid(row=2, column=0, sticky="w", padx=10, pady=5)
         ttk.Spinbox(frame, from_=1, to=4, textvariable=self.count_var, width=8).grid(
-            row=1, column=1, sticky="w", pady=5
+            row=2, column=1, sticky="w", pady=5
         )
 
-        ttk.Label(frame, text="Name").grid(row=2, column=0, sticky="w", padx=10, pady=5)
+        ttk.Label(frame, text="Name").grid(row=3, column=0, sticky="w", padx=10, pady=5)
         ttk.Entry(frame, textvariable=self.name_var).grid(
-            row=2, column=1, columnspan=2, sticky="ew", padx=(0, 10), pady=5
+            row=3, column=1, columnspan=2, sticky="ew", padx=(0, 10), pady=5
         )
 
-        ttk.Label(frame, text="Folder").grid(row=3, column=0, sticky="w", padx=10, pady=5)
+        ttk.Label(frame, text="Folder").grid(row=4, column=0, sticky="w", padx=10, pady=5)
         ttk.Entry(frame, textvariable=self.output_dir_var).grid(
-            row=3, column=1, sticky="ew", pady=5
+            row=4, column=1, sticky="ew", pady=5
         )
         ttk.Button(frame, text="Browse", command=self._choose_output_dir).grid(
-            row=3, column=2, padx=10, pady=5
+            row=4, column=2, padx=10, pady=5
         )
 
-        ttk.Label(frame, text="Extra").grid(row=4, column=0, sticky="w", padx=10, pady=5)
+        ttk.Label(frame, text="Extra").grid(row=5, column=0, sticky="w", padx=10, pady=5)
         self.extra_entry = ttk.Entry(frame)
-        self.extra_entry.grid(row=4, column=1, columnspan=2, sticky="ew", padx=(0, 10), pady=5)
+        self.extra_entry.grid(row=5, column=1, columnspan=2, sticky="ew", padx=(0, 10), pady=5)
 
         self.generate_button = ttk.Button(
             frame,
@@ -191,7 +234,7 @@ class ImageClientApp:
             style="Primary.TButton",
             command=self._generate,
         )
-        self.generate_button.grid(row=5, column=0, columnspan=3, sticky="ew", padx=10, pady=(8, 10))
+        self.generate_button.grid(row=6, column=0, columnspan=3, sticky="ew", padx=10, pady=(8, 10))
 
     def _build_status(self, parent: ttk.Frame) -> None:
         frame = ttk.Frame(parent)
@@ -210,14 +253,26 @@ class ImageClientApp:
         preview_frame.columnconfigure(0, weight=1)
         preview_frame.rowconfigure(0, weight=1)
 
-        self.preview_label = tk.Label(
-            preview_frame,
-            text="No image",
+        canvas_frame = ttk.Frame(preview_frame)
+        canvas_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        canvas_frame.columnconfigure(0, weight=1)
+        canvas_frame.rowconfigure(0, weight=1)
+
+        self.preview_canvas = tk.Canvas(
+            canvas_frame,
             bg="#f8fafc",
-            fg="#64748b",
-            anchor="center",
+            highlightthickness=0,
         )
-        self.preview_label.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        self.preview_canvas.grid(row=0, column=0, sticky="nsew")
+        self.preview_canvas.bind("<Configure>", self._on_preview_resized)
+        self.preview_canvas.create_text(
+            10,
+            10,
+            anchor="nw",
+            text="No image",
+            fill="#64748b",
+            tags=("placeholder",),
+        )
 
         files_frame = ttk.Frame(preview_frame)
         files_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
@@ -234,8 +289,11 @@ class ImageClientApp:
         ttk.Button(files_frame, text="Open Image", command=self._open_selected_image).grid(
             row=1, column=0, sticky="w", pady=(8, 0)
         )
-        ttk.Button(files_frame, text="Open Folder", command=self._open_output_folder).grid(
+        ttk.Button(files_frame, text="Browser Preview", command=self._open_browser_preview).grid(
             row=1, column=1, sticky="w", padx=(8, 0), pady=(8, 0)
+        )
+        ttk.Button(files_frame, text="Open Folder", command=self._open_output_folder).grid(
+            row=1, column=2, sticky="w", padx=(8, 0), pady=(8, 0)
         )
 
     def _toggle_key_visibility(self) -> None:
@@ -335,6 +393,7 @@ class ImageClientApp:
         base_url = normalize_base_url(self.base_url_var.get().strip() or DEFAULT_BASE_URL)
         model = self.model_var.get().strip() or DEFAULT_MODEL
         size = self.size_var.get().strip()
+        quality = self.quality_var.get().strip()
         name = self.name_var.get().strip() or None
         output_dir = Path(self.output_dir_var.get()).expanduser()
         extra_raw = self.extra_entry.get().strip()
@@ -356,6 +415,7 @@ class ImageClientApp:
                     model=model,
                     prompt=prompt,
                     size=size,
+                    quality=quality,
                     n=max(1, min(count, 4)),
                     extra=extra,
                     output_dir=output_dir,
@@ -424,28 +484,73 @@ class ImageClientApp:
             return None
         return Path(self.files_list.get(selection[0]))
 
+    def _on_preview_resized(self, _event: tk.Event[Any]) -> None:
+        if not self.preview_path:
+            return
+        if self.preview_resize_after is not None:
+            self.root.after_cancel(self.preview_resize_after)
+        self.preview_resize_after = self.root.after(80, self._refresh_preview)
+
+    def _refresh_preview(self) -> None:
+        self.preview_resize_after = None
+        if self.preview_path:
+            self._display_image(self.preview_path)
+
     def _display_image(self, path: Path) -> None:
+        self.preview_path = path
         try:
-            source = tk.PhotoImage(file=str(path))
-            preview_width = max(1, self.preview_label.winfo_width() - 24)
-            preview_height = max(1, self.preview_label.winfo_height() - 24)
-            factor = max(
-                1,
-                math.ceil(source.width() / preview_width),
-                math.ceil(source.height() / preview_height),
+            preview_width = max(1, self.preview_canvas.winfo_width())
+            preview_height = max(1, self.preview_canvas.winfo_height())
+
+            if Image is not None and ImageTk is not None:
+                with Image.open(path) as opened_image:
+                    source = opened_image.copy()
+                scale = min(preview_width / source.width, preview_height / source.height)
+
+                if scale != 1.0:
+                    display_size = (
+                        max(1, round(source.width * scale)),
+                        max(1, round(source.height * scale)),
+                    )
+                    display_source = source.resize(display_size, Image.Resampling.LANCZOS)
+                else:
+                    display_source = source
+
+                self.preview_source = display_source
+                self.preview_image = ImageTk.PhotoImage(display_source)
+            else:
+                source = tk.PhotoImage(file=str(path))
+                factor = max(
+                    1,
+                    math.ceil(source.width() / preview_width),
+                    math.ceil(source.height() / preview_height),
+                )
+                self.preview_source = source
+                self.preview_image = source.subsample(factor, factor)
+
+            image_width = self.preview_image.width()
+            image_height = self.preview_image.height()
+            x = max(0, (preview_width - image_width) // 2)
+            y = max(0, (preview_height - image_height) // 2)
+            self.preview_canvas.delete("all")
+            self.preview_canvas.configure(bg="#0f172a")
+            self.preview_canvas.create_image(x, y, image=self.preview_image, anchor="nw")
+            self.preview_canvas.configure(scrollregion=(0, 0, preview_width, preview_height))
+
+            self.status_var.set(
+                f"Previewing {path.name} fit to window ({image_width}x{image_height})"
             )
-            self.preview_source = source
-            self.preview_image = source.subsample(factor, factor)
-            self.preview_label.configure(image=self.preview_image, text="", bg="#0f172a")
-            self.status_var.set(f"Previewing {path.name}")
         except tk.TclError:
             self.preview_source = None
             self.preview_image = None
-            self.preview_label.configure(
-                image="",
+            self.preview_canvas.delete("all")
+            self.preview_canvas.configure(bg="#f8fafc", scrollregion=(0, 0, 1, 1))
+            self.preview_canvas.create_text(
+                10,
+                10,
+                anchor="nw",
                 text=f"Preview unavailable\n{path.name}",
-                bg="#f8fafc",
-                fg="#64748b",
+                fill="#64748b",
             )
 
     def _open_selected_image(self) -> None:
@@ -453,12 +558,59 @@ class ImageClientApp:
         if path:
             open_path(path)
 
+    def _open_browser_preview(self) -> None:
+        path = self._selected_path()
+        if path:
+            open_image_preview_page(path)
+
     def _open_output_folder(self) -> None:
         path = self._selected_path()
         if path:
             open_path(path.parent)
             return
         open_path(Path(self.output_dir_var.get()).expanduser())
+
+
+def open_image_preview_page(path: Path) -> None:
+    path = path.resolve()
+    title = escape(path.name)
+    image_url = path.as_uri()
+    html = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{title}</title>
+  <style>
+    html, body {{
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      background: #0f172a;
+      overflow: hidden;
+    }}
+    body {{
+      display: grid;
+      place-items: center;
+    }}
+    img {{
+      max-width: 100vw;
+      max-height: 100vh;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      image-rendering: auto;
+    }}
+  </style>
+</head>
+<body>
+  <img src="{image_url}" alt="{title}">
+</body>
+</html>
+"""
+    preview_path = Path(tempfile.gettempdir()) / "image-api-client-preview.html"
+    preview_path.write_text(html, encoding="utf-8")
+    webbrowser.open(preview_path.as_uri())
 
 
 def open_path(path: Path) -> None:

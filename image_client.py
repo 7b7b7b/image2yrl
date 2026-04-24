@@ -20,6 +20,8 @@ from typing import Any
 
 DEFAULT_BASE_URL = "http://45.59.101.161:8083/v1"
 DEFAULT_MODEL = "gpt-image-2"
+DEFAULT_ENV_FILE = Path(".env")
+DEFAULT_ENV_EXAMPLE_FILE = Path(".env.example")
 
 
 class ApiError(RuntimeError):
@@ -312,7 +314,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--env-file",
         type=Path,
-        default=Path(".env"),
+        default=DEFAULT_ENV_FILE,
         help="Load environment variables from this file if it exists.",
     )
     parser.add_argument(
@@ -359,6 +361,8 @@ def main() -> int:
     parser = build_parser()
     pre_args, _ = parser.parse_known_args()
     load_env_file(pre_args.env_file)
+    if pre_args.env_file == DEFAULT_ENV_FILE and not pre_args.env_file.exists():
+        load_env_file(DEFAULT_ENV_EXAMPLE_FILE)
 
     parser = build_parser()
     args = parser.parse_args()
