@@ -71,3 +71,8 @@ build_windows_exe.bat
 ```
 
 打包完成后，程序会在 `dist\ImageApiClient.exe`。
+
+## 部署到子域名
+
+可以把网页客户端部署到 Render，并绑定到 `image.wormforce.net`。
+部署说明见 [DEPLOY_RENDER.md](DEPLOY_RENDER.md)。

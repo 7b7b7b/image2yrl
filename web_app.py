@@ -7,6 +7,8 @@ import json
 import mimetypes
 import os
 import base64
+import argparse
+import hmac
 import socket
 import sys
 import threading
@@ -56,12 +58,60 @@ HISTORY_PATH = OUTPUT_DIR / "history.json"
 HISTORY_LOCK = threading.Lock()
 SIZES = ("auto", "1024x1024", "1536x1024", "1024x1536", "2048x2048", "2048x1152", "3840x2160", "2160x3840")
 QUALITIES = ("high", "medium", "low", "auto")
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
 
 
 def load_config() -> None:
     load_env_file(ENV_PATH)
     if not ENV_PATH.exists():
         load_env_file(ENV_EXAMPLE_PATH)
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def split_hosts(raw: str | None) -> set[str]:
+    if not raw:
+        return set()
+    return {host.strip().lower() for host in raw.split(",") if host.strip()}
+
+
+def host_without_port(value: str) -> str:
+    value = value.split(",", 1)[0].strip().lower()
+    if not value:
+        return ""
+    if value.startswith("["):
+        return value.split("]", 1)[0] + "]"
+    if value.count(":") > 1:
+        return value
+    return value.split(":", 1)[0]
+
+
+def is_loopback_host(host: str) -> bool:
+    return host_without_port(host) in LOOPBACK_HOSTS
+
+
+def allowed_hosts() -> set[str]:
+    return split_hosts(os.environ.get("ALLOWED_HOSTS"))
+
+
+def public_request_host(host: str) -> bool:
+    return not is_loopback_host(host)
+
+
+def auth_config() -> tuple[str, str]:
+    username = os.environ.get("APP_USERNAME", "admin").strip() or "admin"
+    password = os.environ.get("APP_PASSWORD", "").strip()
+    return username, password
+
+
+def auth_required(host: str) -> bool:
+    _username, password = auth_config()
+    return bool(password) or public_request_host(host)
 
 
 def image_payload(path: Path, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -298,6 +348,7 @@ def json_response(handler: BaseHTTPRequestHandler, payload: dict[str, Any], stat
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(data)))
+    send_common_headers(handler)
     handler.end_headers()
     handler.wfile.write(data)
 
@@ -307,8 +358,15 @@ def text_response(handler: BaseHTTPRequestHandler, content: str, content_type: s
     handler.send_response(200)
     handler.send_header("Content-Type", content_type)
     handler.send_header("Content-Length", str(len(data)))
+    send_common_headers(handler)
     handler.end_headers()
     handler.wfile.write(data)
+
+
+def send_common_headers(handler: BaseHTTPRequestHandler) -> None:
+    handler.send_header("X-Content-Type-Options", "nosniff")
+    handler.send_header("Referrer-Policy", "same-origin")
+    handler.send_header("Cache-Control", "no-store")
 
 
 class ImageWebHandler(BaseHTTPRequestHandler):
@@ -317,7 +375,87 @@ class ImageWebHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         return
 
+    def request_host(self) -> str:
+        forwarded_host = self.headers.get("X-Forwarded-Host")
+        return forwarded_host or self.headers.get("Host", "")
+
+    def reject_forbidden_host(self) -> bool:
+        hosts = allowed_hosts()
+        if not hosts:
+            return False
+
+        host = host_without_port(self.request_host())
+        if host in hosts or host in LOOPBACK_HOSTS:
+            return False
+
+        self.send_error(404)
+        return True
+
+    def reject_missing_password(self) -> bool:
+        host = self.request_host()
+        if not public_request_host(host):
+            return False
+
+        _username, password = auth_config()
+        if password:
+            return False
+
+        json_response(
+            self,
+            {
+                "error": (
+                    "APP_PASSWORD is not configured. Set APP_USERNAME and "
+                    "APP_PASSWORD before exposing this service publicly."
+                )
+            },
+            status=503,
+        )
+        return True
+
+    def reject_unauthorized(self) -> bool:
+        host = self.request_host()
+        if not auth_required(host):
+            return False
+
+        username, password = auth_config()
+        if not password:
+            return False
+
+        header = self.headers.get("Authorization", "")
+        prefix = "Basic "
+        if header.startswith(prefix):
+            try:
+                decoded = base64.b64decode(header[len(prefix) :], validate=True).decode("utf-8")
+                supplied_username, supplied_password = decoded.split(":", 1)
+                if hmac.compare_digest(supplied_username, username) and hmac.compare_digest(
+                    supplied_password,
+                    password,
+                ):
+                    return False
+            except (ValueError, UnicodeDecodeError):
+                pass
+
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="Image2YRL", charset="UTF-8"')
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(b"Authentication required.")
+        return True
+
+    def ensure_access(self) -> bool:
+        if self.reject_forbidden_host():
+            return False
+        if self.reject_missing_password():
+            return False
+        if self.reject_unauthorized():
+            return False
+        return True
+
     def do_GET(self) -> None:
+        if not self.ensure_access():
+            return
+
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/":
             text_response(self, INDEX_HTML)
@@ -337,6 +475,9 @@ class ImageWebHandler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self) -> None:
+        if not self.ensure_access():
+            return
+
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/api/generate":
             self.handle_generate()
@@ -469,6 +610,8 @@ class ImageWebHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "private, max-age=3600")
         self.end_headers()
         self.wfile.write(data)
 
@@ -482,10 +625,11 @@ INDEX_HTML = r"""<!doctype html>
   <style>
     :root { color-scheme: light; --bg:#f4f6f8; --panel:#ffffff; --line:#d8dee6; --text:#111827; --muted:#64748b; --accent:#2563eb; --accent-dark:#1d4ed8; }
     * { box-sizing: border-box; }
-    body { margin:0; min-height:100vh; background:var(--bg); color:var(--text); font:14px/1.45 "Segoe UI", Arial, sans-serif; }
-    .app { display:grid; grid-template-columns: 390px minmax(0, 1fr); min-height:100vh; }
+    html { min-height:100%; }
+    body { margin:0; min-height:100vh; min-height:100dvh; background:var(--bg); color:var(--text); font:14px/1.45 "Segoe UI", Arial, sans-serif; }
+    .app { display:grid; grid-template-columns: 390px minmax(0, 1fr); min-height:100vh; min-height:100dvh; }
     aside { background:var(--panel); border-right:1px solid var(--line); padding:18px; overflow:auto; }
-    main { display:grid; grid-template-rows:minmax(0, 1fr) auto; min-width:0; }
+    main { display:grid; grid-template-rows:minmax(0, 1fr) auto; min-width:0; min-height:0; }
     h1 { margin:0 0 16px; font-size:20px; font-weight:650; letter-spacing:0; }
     label { display:block; margin:12px 0 6px; font-weight:600; color:#243041; }
     textarea, input, select { width:100%; border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--text); padding:9px 10px; font:inherit; }
@@ -516,7 +660,29 @@ INDEX_HTML = r"""<!doctype html>
     .thumb { width:112px; height:74px; object-fit:cover; border:2px solid transparent; border-radius:6px; margin-right:8px; vertical-align:middle; cursor:pointer; background:#e5e7eb; }
     .thumb.active { border-color:var(--accent); }
     .error { color:#b91c1c; margin-top:10px; white-space:pre-wrap; }
-    @media (max-width: 860px) { .app { grid-template-columns:1fr; grid-template-rows:auto minmax(60vh, 1fr); } aside { border-right:0; border-bottom:1px solid var(--line); } }
+    @media (max-width: 860px) {
+      body { font-size:15px; }
+      .app { display:block; min-height:100vh; min-height:100dvh; }
+      aside { border-right:0; border-bottom:1px solid var(--line); padding:14px; overflow:visible; }
+      main { min-height:60vh; min-height:60dvh; grid-template-rows:minmax(52vh, 1fr) auto; grid-template-rows:minmax(52dvh, 1fr) auto; }
+      h1 { margin-bottom:12px; font-size:18px; }
+      label { margin:10px 0 5px; }
+      textarea { min-height:128px; }
+      textarea, input, select, button { min-height:42px; font-size:16px; }
+      .row { grid-template-columns:1fr; gap:0; }
+      .actions { grid-template-columns:1fr; }
+      .stage { min-height:52vh; min-height:52dvh; padding:10px; }
+      .strip { padding:8px 10px; }
+      .thumb { width:96px; height:64px; margin-right:6px; }
+      .refs { min-height:68px; }
+    }
+    @media (max-width: 480px) {
+      aside { padding:12px; }
+      textarea { min-height:112px; }
+      .stage { min-height:48vh; min-height:48dvh; }
+      main { grid-template-rows:minmax(48vh, 1fr) auto; grid-template-rows:minmax(48dvh, 1fr) auto; }
+      .thumb { width:84px; height:58px; }
+    }
   </style>
 </head>
 <body>
@@ -571,11 +737,18 @@ INDEX_HTML = r"""<!doctype html>
       referenceImages.forEach((image, index) => {
         const item = document.createElement("div");
         item.className = "ref";
-        item.innerHTML = `<img src="${image.data}" title="${image.name}"><button type="button" title="Remove">x</button>`;
-        item.querySelector("button").addEventListener("click", () => {
+        const img = document.createElement("img");
+        img.src = image.data;
+        img.title = image.name;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.title = "Remove";
+        button.textContent = "x";
+        button.addEventListener("click", () => {
           referenceImages.splice(index, 1);
           renderReferences();
         });
+        item.append(img, button);
         $("refs").appendChild(item);
       });
     }
@@ -602,7 +775,12 @@ INDEX_HTML = r"""<!doctype html>
     function showImage(index) {
       active = index;
       const image = images[index];
-      $("imageHost").innerHTML = `<img class="image" src="${image.url}" alt="${image.name}">`;
+      $("imageHost").innerHTML = "";
+      const img = document.createElement("img");
+      img.className = "image";
+      img.src = image.url;
+      img.alt = image.name;
+      $("imageHost").appendChild(img);
       [...$("strip").querySelectorAll("img")].forEach((img, i) => img.classList.toggle("active", i === index));
       if (image.prompt) $("prompt").value = image.prompt;
       if (image.model) $("model").value = image.model;
@@ -700,13 +878,40 @@ def find_free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run the Image2YRL browser web app.")
+    parser.add_argument(
+        "--host",
+        default=os.environ.get("HOST", "127.0.0.1"),
+        help="Host interface to bind. Use 0.0.0.0 for deployment.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ["PORT"]) if os.environ.get("PORT") else None,
+        help="Port to listen on. Defaults to PORT env var or a free local port.",
+    )
+    return parser
+
+
+def should_open_browser(host: str) -> bool:
+    if "APP_OPEN_BROWSER" in os.environ:
+        return env_bool("APP_OPEN_BROWSER")
+    return is_loopback_host(host)
+
+
 def main() -> None:
+    args = build_parser().parse_args()
     load_config()
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    port = find_free_port()
-    server = ThreadingHTTPServer(("127.0.0.1", port), ImageWebHandler)
-    url = f"http://127.0.0.1:{port}/"
-    threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+    host = args.host
+    port = args.port or find_free_port()
+    server = ThreadingHTTPServer((host, port), ImageWebHandler)
+    browser_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    url = f"http://{browser_host}:{port}/"
+    print(f"Serving Image2YRL on {url}", flush=True)
+    if should_open_browser(host):
+        threading.Timer(0.4, lambda: webbrowser.open(url)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

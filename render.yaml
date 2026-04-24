@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: image2yrl
+    runtime: python
+    plan: free
+    buildCommand: python -m py_compile image_client.py web_app.py
+    startCommand: python web_app.py --host 0.0.0.0
+    envVars:
+      - key: IMAGE_API_BASE
+        value: http://45.59.101.161:8083/v1
+      - key: IMAGE_MODEL
+        value: gpt-image-2
+      - key: IMAGE_API_KEY
+        sync: false
+      - key: APP_USERNAME
+        value: admin
+      - key: APP_PASSWORD
+        sync: false
+      - key: ALLOWED_HOSTS
+        value: image.wormforce.net
+      - key: APP_OPEN_BROWSER
+        value: "0"
