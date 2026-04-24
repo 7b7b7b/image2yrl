@@ -40,6 +40,9 @@ export default {
       if (request.method === "GET" && url.pathname === "/api/models") {
         return handleModels(env);
       }
+      if (request.method === "GET" && url.pathname === "/api/image") {
+        return handleImageProxy(request, env);
+      }
       if (request.method === "POST" && url.pathname === "/api/generate") {
         return handleGenerate(request, env);
       }
@@ -247,6 +250,63 @@ async function handleModels(env) {
   return jsonResponse({ models: imageModels.length ? imageModels : models });
 }
 
+async function handleImageProxy(request, env) {
+  validateApiKey(env.IMAGE_API_KEY || "");
+  assertFetchableApiBase(env.IMAGE_API_BASE || DEFAULT_BASE_URL);
+
+  const requestUrl = new URL(request.url);
+  const rawUrl = requestUrl.searchParams.get("u") || "";
+  let imageUrl;
+  try {
+    imageUrl = new URL(rawUrl);
+  } catch {
+    return new Response("Invalid image URL.", { status: 400, headers: commonHeaders() });
+  }
+
+  if (!["http:", "https:"].includes(imageUrl.protocol)) {
+    return new Response("Unsupported image URL protocol.", { status: 400, headers: commonHeaders() });
+  }
+
+  const upstreamBase = new URL(normalizeBaseUrl(env.IMAGE_API_BASE || DEFAULT_BASE_URL));
+  const allowedHosts = new Set([upstreamBase.hostname, "45.59.101.161"]);
+  if (!allowedHosts.has(imageUrl.hostname)) {
+    return new Response("Image URL host is not allowed.", { status: 403, headers: commonHeaders() });
+  }
+
+  if (imageUrl.hostname === "45.59.101.161") {
+    imageUrl.hostname = upstreamBase.hostname;
+  }
+
+  let response;
+  try {
+    response = await fetch(imageUrl.toString(), {
+      headers: {
+        Authorization: `Bearer ${env.IMAGE_API_KEY}`,
+        Accept: "image/*,*/*",
+      },
+    });
+  } catch (error) {
+    return new Response(`Image proxy failed: ${error.message || String(error)}`, {
+      status: 502,
+      headers: commonHeaders(),
+    });
+  }
+
+  if (!response.ok) {
+    return new Response(`Image proxy failed with HTTP ${response.status}.`, {
+      status: 502,
+      headers: commonHeaders(),
+    });
+  }
+
+  const headers = {
+    ...commonHeaders(),
+    "Cache-Control": "private, max-age=3600",
+    "Content-Type": response.headers.get("Content-Type") || "image/png",
+  };
+  return new Response(response.body, { status: 200, headers });
+}
+
 async function handleGenerate(request, env) {
   const body = await request.json();
   if (!body || typeof body !== "object") throw new Error("Request body must be a JSON object.");
@@ -404,17 +464,21 @@ async function extractImageItem(item) {
   if (typeof item.image === "string") {
     if (item.image.startsWith("data:")) return { url: item.image };
     if (item.image.startsWith("http://") || item.image.startsWith("https://")) {
-      return { url: item.image };
+      return { url: proxiedImageUrl(item.image) };
     }
     return { url: `data:image/png;base64,${item.image}` };
   }
   if (typeof item.url === "string") {
     if (item.url.startsWith("data:")) return { url: item.url };
     if (item.url.startsWith("http://") || item.url.startsWith("https://")) {
-      return { url: item.url };
+      return { url: proxiedImageUrl(item.url) };
     }
   }
   throw new Error(`Cannot find image data in item: ${JSON.stringify(item).slice(0, 500)}`);
+}
+
+function proxiedImageUrl(url) {
+  return `/api/image?u=${encodeURIComponent(url)}`;
 }
 
 function safeFilename(value) {
@@ -442,6 +506,7 @@ function timestampSlug() {
 }
 
 function extensionFromDataUrl(dataUrl) {
+  if (dataUrl.startsWith("/")) return ".png";
   if (dataUrl.startsWith("http://") || dataUrl.startsWith("https://")) {
     const pathname = new URL(dataUrl).pathname.toLowerCase();
     if (pathname.endsWith(".jpg") || pathname.endsWith(".jpeg")) return ".jpg";

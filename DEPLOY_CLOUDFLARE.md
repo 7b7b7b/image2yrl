@@ -117,8 +117,9 @@ npm run dev
 
 - This Workers version does not need a server or credit card.
 - If the upstream API returns image URLs, the Worker passes those URLs through
-  instead of downloading the image again. This keeps responses smaller and
-  avoids an extra failure point.
+  through a same-origin `/api/image` proxy. This avoids HTTPS pages loading
+  plain HTTP image links directly and rewrites raw `45.59.101.161` links to
+  `image-api.wormforce.net`.
 - If the upstream API returns base64 image data, generated images are returned
   to the current browser session as data URLs. Use the `Download` button to keep
   anything important.
@@ -150,3 +151,18 @@ First retry the same prompt. If it happens often:
    huge image payloads.
 4. For the most stable production setup, put the upstream image API behind
    HTTPS on port `443` instead of HTTP port `8083`.
+
+### A specific living celebrity fails but other people work
+
+Some image APIs apply stricter moderation or different result handling for
+living public figures. For example, a prompt naming LeBron James can fail while
+Kobe Bryant succeeds because one is a living public figure and the other is not.
+
+Try a safer prompt such as:
+
+```text
+生成一个虚构的职业篮球运动员海报，高大强壮，湖人配色，23号球衣，不要真实人物肖像
+```
+
+If exact living-celebrity likeness is required, the upstream image API must
+explicitly support that use case.
